@@ -1,0 +1,307 @@
+# Installation guide for DeePMD+LAMMPS+PLUMED+Tensorflow on LUMI-G in Finland
+# Raymond Amador, Empa and ETH Zürich, Switzerland
+# based *heavily* on the discussions here: https://github.com/deepmodeling/deepmd-kit/discussions/2523
+# and also on the Instructions from Enrico Trizio, who managed to perform a similar compilation on an Ubuntu 20.04.
+# Lastly, Dr. Tor Skovsgaard at LUMI and Dr. Marco Bortoli and Prof. Sigbjørn Løland Bore at Uni Oslo helped a lot
+# Created: 28.09.2024; edited 14.10.2024, 15.10.2024, 16.10.2024, 28.10.2024, 04.11.2024, 14.11.2024, 18.11.2024
+# Today's date: 04.12.2024
+
+### --- 0. RCCL library --- ###
+
+wget https://github.com/ROCm/rccl/archive/refs/tags/rocm-6.0.2.tar.gz
+tar -xf rocm-6.0.2.tar.gz
+cd rccl-rocm-6.0.2
+export RCCL_ROOT=$PWD/build/release
+cd ..
+mkdir rccl-install
+export RCCL_INSTALL=$(realpath rccl-install) # CHANGE REALPATH HERE
+
+module reset
+module load LUMI/24.03 partition/G
+module load buildtools
+module load cray-python
+module unload PrgEnv-cray
+module load PrgEnv-gnu
+module load rocm
+export ROCM_ROOT=$ROCM_PATH
+
+cd rccl-rocm-6.0.2
+. install.sh  --install --prefix=$RCCL_INSTALL # takes about 90mins
+
+# YOU WILL PROBABLY GET THE FOLLOWING ERROR:
+# CMake Error at cmake_install.cmake:57 (file):
+#  file INSTALL cannot copy file
+#  "/scratch/project_465000480/amadorra/rccl-rocm-6.0.2/build/release/librccl.so.1.0"
+#  to "/opt/rocm-6.0.3/lib/librccl.so.1.0": Permission denied.
+
+# and then you'll be logged out of LUMI
+# apparently (according to Prof. Sigbjørn Løland Bore) this is due to some installation bug,
+# where it tries to install to some "default" location.
+
+# HOWEVER, the compilation still goes well. 
+# Just log back into LUMI and proceed
+
+# navigate to the same parent directory as above (for me it was my $SCRATCH) before continuing!!!
+# we now need to re-define the environment variables as above, since we're in a new session:
+
+module reset
+module load LUMI/24.03 partition/G
+module load buildtools
+module load cray-python
+module unload PrgEnv-cray
+module load PrgEnv-gnu
+module load rocm
+export RCCL_ROOT=$PWD/build/release
+export RCCL_INSTALL=$(realpath rccl-install) # CHANGE REALPATH HERE
+export ROCM_ROOT=$ROCM_PATH
+
+
+### --- 1. DeePMD python modules --- ###
+
+module reset
+module load LUMI/24.03 partition/G
+module load buildtools
+module load cray-python
+module unload PrgEnv-cray
+module load PrgEnv-gnu
+module load rocm
+export ROCM_ROOT=$ROCM_PATH
+
+### --- 2. Tensorflow --- ###
+
+START_DIR=$PWD
+python3 -m venv deepmd-env # name the virtual environment whatever you want but be consistent throughout the installation
+source deepmd-env/bin/activate
+CXX=g++-12 CC=gcc-12 LD=g++-12 LDFLAGS="-L$ROCM_PATH/lib/ -lamdhip64" pip install tensorflow-rocm==2.14.* --verbose
+pip install numpy==1.24.0
+pip install setuptools==68.2.2
+
+### --- 3. HOROVOD (important for linear algebra efficiency) --- ###
+
+git clone --recursive https://github.com/horovod/horovod.git
+module reset
+module load LUMI/24.03 partition/G
+module load buildtools
+module load cray-python
+module unload PrgEnv-cray
+module load PrgEnv-gnu
+module load rocm
+export ROCM_ROOT=$ROCM_PATH
+export RCCL_HOME=$RCCL_ROOT #MUST HAVE A COMPILED VERSION OF RCCL: make sure your $RCCL_ROOT was exported at the end of step 0 above!!!
+source deepmd-env/bin/activate
+
+# keine Ahnung if there are some not useful variables here
+# the compilation works exporting all of them though:
+
+export ROCM_DEVICE_LIB_PATH=$ROCM_PATH/lib
+export HIP_PATH=$ROCM_ROOT
+export HIP_ROOT_DIR=$ROCM_ROOT
+export HOROVOD_WITHOUT_MXNET=1
+export HOROVOD_WITHOUT_PYTORCH=1
+export HOROVOD_GPU=ROCM
+export HOROVOD_GPU_OPERATIONS=NCCL
+export HOROVOD_WITHOUT_GLOO=1
+export HOROVOD_WITH_TENSORFLOW=1
+export HOROVOD_ROCM_PATH=$ROCM_PATH
+export HOROVOD_ROCM_HOME=/opt/rocm-6.0.3
+export HOROVOD_RCCL_HOME=$RCCL_HOME
+export HOROVOD_NCCL_INCLUDE=$HOROVOD_RCCL_HOME/include/rccl
+export HOROVOD_RCCL_INCLUDE=$HOROVOD_RCCL_HOME/include/rccl/
+export RCCL_INCLUDE_DIRS=$HOROVOD_RCCL_HOME/include/rccl/
+export HOROVOD_RCCL_LIB=$HOROVOD_RCCL_HOME/lib
+export HOROVOD_BUILD_ARCH_FLAGS="-I$RCCL_HOME/include/rccl/"
+export HOROVOD_MPICXX_SHOW="CC --cray-print-opts=all"
+export HCC_AMDGPU_TARGET=gfx90a
+
+LDFLAGS="-L$ROCM_PATH/lib/ -lamdhip64" MPICC=cc pip install mpi4py #INSTALL MPI4PY FIRST
+ 
+cd horovod
+
+# Horovod initially gave some error " Unknown CMake command "hip_add_library" ",
+# so we need to copy the relative cmake modules from the ROCM libs:
+
+cp -r $ROCM_PATH/lib/cmake/hip/FindHIP cmake/Modules
+cp $ROCM_PATH/lib/cmake/hip/FindHIP.cmake cmake/Modules
+CXX=CC pip install --verbose .
+cd ..
+
+### --- 4. DeePMD-kit fitting --- ###
+
+git clone https://github.com/deepmodeling/deepmd-kit.git -b v2.2.9 --depth 1
+cd deepmd-kit
+sed -i '/gelu_multi_device.cc/d' source/op/CMakeLists.txt
+ 
+export DP_VARIANT=rocm
+export SKBUILD_CMAKE_DEFINE=CMAKE_HIP_ARCHITECTURES:STRING=gfx90a
+CXX=g++-12 CC=gcc-12 LD=g++-12 LDFLAGS="-L$ROCM_PATH/lib/ -lamdhip64" pip install . --verbose
+cd ..
+
+### --- 5. LAMMPS: download --- ###
+
+wget https://github.com/lammps/lammps/archive/refs/tags/stable_29Aug2024.tar.gz 
+tar -xf stable_29Aug2024.tar.gz
+
+### --- 6. LAMMPS: DeePMD plugin --- ###
+
+cd deepmd-kit/build
+mkdir plugins
+cd plugins
+ 
+module reset
+module load LUMI/24.03 partition/G
+module load buildtools/24.03
+module load cray-python
+module unload PrgEnv-cray
+module load PrgEnv-gnu
+module load rocm
+export ROCM_ROOT=$ROCM_PATH
+
+source ${START_DIR}/deepmd-env/bin/activate # CHANGE PATH with your own deepmd-env
+ 
+export LAMMPS_ROOT="${START_DIR}/lammps-stable_29Aug2024" #change with the path of your LAMMPS source
+export deepmd_root="${START_DIR}/deepmd-kit-install" #change with the path of  where you want deepmd plugins to be installed
+ 
+cmake -DCMAKE_INSTALL_PREFIX=$deepmd_root -DUSE_ROCM_TOOLKIT=TRUE -DUSE_TF_PYTHON_LIBS=TRUE -DLAMMPS_SOURCE_ROOT=$LAMMPS_ROOT  -DCMAKE_BUILD_TYPE=Release -DHIP_HIPCC_FLAGS="--amdgpu-target=gfx90a" -DDP_VARIANT=rocm -DCMAKE_HIP_ARCHITECTURES=gfx90a ../../source
+ 
+make -j 8
+make install
+cd $START_DIR
+PATH=$deepmd_root/bin:$PATH
+PATH=$deepmd_root/lib:$PATH
+
+### --- 5. PLUMED --- ###
+
+wget  https://github.com/plumed/plumed2/archive/refs/tags/v2.9.2.tar.gz
+tar -xf v2.9.2.tar.gz
+mkdir plumed-install
+PLUMED_INSTALL=$(realpath plumed-install)
+cd plumed2-2.9.2
+./configure --enable-modules=all CXX=CC CC=cc  CXXFLAGS=-O3 --prefix=$PLUMED_INSTALL
+ 
+make -j 16 
+
+# You'll probably get the following error:
+/*
+make[1]: Verzeichnis „/pfs/lustrep1/scratch/project_465000480/amadorra/plumed2-2.9.2/json“ wird betreten
+./get_action_list.sh > action_list
+../src/lib/plumed --no-mpi gen_json --actions action_list > syntax.json
+cat syntax.json | jq empty
+parse error: Invalid numeric literal at line 17290, column 18
+make[1]: *** [Makefile:27: all] Fehler 4
+make[1]: Verzeichnis „/pfs/lustrep1/scratch/project_465000480/amadorra/plumed2-2.9.2/json“ wird verlassen
+make: *** [Makefile:24: all] Fehler 2
+*/
+# (sorry that it's in German)
+# but it's an error about some json files, but it seems it does not affect the main part of the plumed kernel
+
+make install
+
+cd ../plumed-install
+mkdir pkgconfig
+cd pkgconfig
+
+#CHANGE the prefix= below to the path of your PLUMED install if necessary
+
+echo "
+prefix= $PLUMED_INSTALL
+exec_prefix=\${prefix}
+libdir=\${exec_prefix}/lib
+includedir=\${prefix}/include
+
+Name: plumed
+Description: plumed
+Version: 2.9.2
+Libs: -L\${libdir} 
+Cflags: -I\${includedir}
+" > plumed.pc
+
+cd $START_DIR
+
+### --- 6. LAMMPS: compilation --- ###
+
+mkdir lammps-install
+LAMMPS_INSTALL=$(realpath  lammps-install) # CHANGE PATH to the path of the above directory
+cd lammps-stable_29Aug2024
+mkdir build
+cd build
+ 
+module reset
+module load LUMI/24.03 partition/G
+module load buildtools/24.03
+module load cray-python
+module unload PrgEnv-cray
+module load PrgEnv-gnu
+module load rocm
+module load cray-fftw/3.3.10.7
+export ROCM_ROOT=$ROCM_PATH
+export PKG_CONFIG_PATH="$PLUMED_INSTALL/pkgconfig:$PKG_CONFIG_PATH"
+ 
+export PATH
+cmake -DCMAKE_CXX_COMPILER=g++-12  -D CMAKE_C_COMPILER=gcc-12  -D CMAKE_Fortran_COMPILER=gfortran-12 -D PKG_PLUMED=yes -D PLUMED_MODE=runtime -D DOWNLOAD_PLUMED=NO -D GPU_API=HIP -D HIP_PATH=/opt/rocm-6.0.3/ -D HIP_ARCH=gfx90a  -D PKG_OPENMP=yes   -D PKG_PLUGIN=ON -D PKG_KSPACE=ON -D PKG_EXTRA-FIX=ON -D LAMMPS_INSTALL_RPATH=ON -DBUILD_SHARED_LIBS=yes -D CMAKE_INSTALL_PREFIX=$LAMMPS_INSTALL ../cmake
+ 
+make -j 8
+make install
+
+
+echo """module reset
+module load LUMI/24.03 partition/G
+module load buildtools/24.03
+module load cray-python
+module unload PrgEnv-cray
+module load PrgEnv-gnu
+module load rocm
+module load cray-fftw/3.3.10.7
+export RCCL_INSTALL=$PWD/rccl-install
+export ROCM_ROOT=$ROCM_PATH
+source $PWD/deepmd-env/bin/activate
+export LAMMPS_PLUGIN_PATH=$PWD/deepmd-kit-install/lib/deepmd_lmp:\${LAMMPS_PLUGIN_PATH}
+PATH=$PWD/lammps-install/bin/:$PWD/deepmd-kit-install/bin/:\$PATH
+export LD_LIBRARY_PATH=$PWD/deepmd-kit-install/lib:\$(python -c 'import tensorflow; print(tensorflow.sysconfig.get_lib())'):\${LD_LIBRARY_PATH}
+"""  > env.sh
+
+### --- 7. INSTALL dpdata --- ###
+
+# all training data should first be converted into the compressed data format adopted by DeePMD.
+# within your virtual environment:
+
+pip install dpdata
+
+### --- 8. COMPILATION NOW COMPLETE. NOW, MAKE SURE EVERYTHING WORKS --- ###
+
+cd $START_DIR
+dp -h # should give you a bunch of options and subcommands... testing if everything was done correctly
+
+### --- 9. TRAINING YOUR FIRST POTENTIAL --- ### 
+### --- verbatim from: https://tutorials.deepmodeling.com/en/latest/Tutorials/DeePMD-kit/learnDoc/run5minutes.html --- ###
+
+### --- 9.1 Downloading and decompressing the tutorial data
+
+cd $START_DIR
+wget https://dp-public.oss-cn-beijing.aliyuncs.com/community/DeePMD-kit-FastLearn.tar
+tar xvf DeePMD-kit-FastLearn.tar
+cd DeePMD-kit-FastLearn
+ls
+>>> 00.data 01.train data
+# 00.data: contains VASP result
+# 01.train: contains DeePMD-kit config
+# data: contains DeePMD-kit training and validation data
+
+### --- 9.2 PREPARING DATA
+
+cd 00.data
+ls
+>>> OUTCAR
+
+# OUTCAR: VASP output; needs to be converted into DeePMD-kit format
+# let's open a python shell and do that:
+
+python
+>>> import dpdata # installed in step 7 above
+>>> dpdata.LabeledSystem('OUTCAR').to('deepmd/npy', 'data', set_size=200)
+>>> exit()
+
+# this should have converted the OUTCAR VASP file and saved it into a directory named `data`, where `npy` is the 
+# compressed format of numpy, and is the required format for DeePMD-kit training
+
+
+### --- IF YOU MADE IT TO HERE IT SHOULD WORK, follow the above tutorial for more --- ###
