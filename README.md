@@ -106,13 +106,11 @@ This repository is licensed under the **MIT License**.
 
 If you use this workflow or any part of the codebase, please cite:
 
-> *Amador, R. (2025). Active learning workflow for machine-learned interatomic potentials of DBBA on Pd surfaces. GitHub Repository.*
-
-(Full citation to be updated with DOI or Zenodo archive if applicable.)
+> *Amador, R. and Brovelli, S. (2025). Active learning workflow for machine-learned interatomic potentials of DBBA on Pd surfaces. GitHub Repository.*
 
 ---
 
 ## 📬 Contact
 
 For questions or feedback, please contact:
-**Raymond Amador** — [GitHub Profile](https://github.com/) (add actual profile URL)
+**Raymond Amador** — [GitHub Profile](https://github.com/ramador09/)
