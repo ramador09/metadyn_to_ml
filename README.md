@@ -1,6 +1,6 @@
 # MLIP Active Learning Workflow for DBBA on Pd Surfaces
 
-This repository contains a complete, modular workflow for performing active learning-based training and evaluation of machine-learned interatomic potentials (MLIPs), specifically applied to simulations of DBBA on Pd surfaces. The scripts support selecting training configurations based on force uncertainty, preprocessing and splitting trajectories, and analyzing RDFs and model performance across iterations.
+This repository contains a complete workflow for performing active learning-based training and evaluation of machine-learned interatomic potentials (MLIPs), specifically applied to simulations of DBBA on Pd surfaces. The scripts support selecting training configurations based on force uncertainty, preprocessing and splitting trajectories, and analyzing RDFs and model performance across iterations.
 
 ---
 
